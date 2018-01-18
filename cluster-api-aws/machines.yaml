@@ -1,0 +1,26 @@
+items:
+- apiVersion: "cluster.k8s.io/v1alpha1"
+  kind: Machine
+  metadata:
+    generateName: aws-master-
+    labels:
+      set: master
+  spec:
+    providerConfig: >
+      {
+        "apiVersion": "awsproviderconfig/v1alpha1",
+        "kind": "AWSMachineProviderConfig",
+        "region": "us-west-2",
+        "zone": "us-west-2a",
+        "subnetCIDR": "172.23.2.0/24",
+        "image": "ami-1ee65166",
+        "machineType": "t2.medium"
+      }
+    versions:
+      kubelet: 1.7.4
+      controlPlane: 1.7.4
+      containerRuntime:
+        name: docker
+        version: 1.12.0
+    roles:
+    - Master
