@@ -22,13 +22,13 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/types"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api/client"
 	apiutil "k8s.io/kube-deploy/cluster-api/util"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -107,4 +107,38 @@ func GetMachineIfExists(machineClient client.MachinesInterface, name string, uid
 		return nil, nil
 	}
 	return machine, nil
+}
+
+// WaitForCondition samples the condition function at samplePeriod intervals, returns with a nil error when the condition is true
+// returns with a error if the time expires or if the condition reports an error
+func WaitForCondition(samplePeriod, expirationTime time.Duration, description string, condition func() (bool, error)) error {
+
+	ok, err := condition()
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	expiration := time.NewTimer(expirationTime)
+	defer expiration.Stop()
+	tick := time.NewTicker(samplePeriod)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-expiration.C:
+			return fmt.Errorf("wait timeout (%s) expired for %s", expirationTime, description)
+
+		case <-tick.C:
+			ok, err = condition()
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		}
+	}
 }

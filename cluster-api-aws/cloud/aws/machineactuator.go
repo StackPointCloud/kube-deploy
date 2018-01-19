@@ -20,6 +20,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
+	"time"
 
 	awsv1alpha1 "k8s.io/kube-deploy/cluster-api-aws/cloud/aws/awsproviderconfig/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api-aws/util"
@@ -70,6 +74,7 @@ func GetSession(region, zone string) (*Session, error) {
 
 type SshCreds struct {
 	user           string
+	publicKeyPath  string
 	privateKeyPath string
 }
 
@@ -98,23 +103,23 @@ func (sess *Session) CreateVolume(volumeType string, sizeGB int64) (string, erro
 	return *volume.VolumeId, nil
 }
 
-func NewMachineActuator(kubeadmToken string, machineClient client.MachinesInterface) (*AWSClient, error) {
+func NewMachineActuator(kubeadmToken string, sshKeyPath string, machineClient client.MachinesInterface) (*AWSClient, error) {
 
-	// config := &awssdk.Config{
-	// 	Region:      awssdk.String(region),
-	// 	Credentials: credentials.NewEnvCredentials(),
-	// }
-
-	// _, err := config.Credentials.Get()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// sdkSession, err := session.NewSession(config)
+	sshCreds := SshCreds{
+		privateKeyPath: path.Join(sshKeyPath, "id_rsa"),
+		publicKeyPath:  path.Join(sshKeyPath, "id_rsa.pub"),
+	}
+	if _, err := os.Stat(sshCreds.publicKeyPath); err != nil {
+		return nil, fmt.Errorf("Problem acesssing file path %s", sshCreds.publicKeyPath)
+	}
+	if _, err := os.Stat(sshCreds.privateKeyPath); err != nil {
+		return nil, fmt.Errorf("Problem acesssing file path %s", sshCreds.privateKeyPath)
+	}
 
 	return &AWSClient{
 		awsCredentials: credentials.NewEnvCredentials(),
-		kubeadmToken:   util.RandomToken(),
+		kubeadmToken:   kubeadmToken,
+		sshCreds:       sshCreds,
 	}, nil
 
 }
@@ -141,33 +146,79 @@ func getMachineProviderConfig(machine *clusterv1.Machine) (*awsv1alpha1.AWSMachi
 	return &config, nil
 }
 
-func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Machine) error {
+func validateMachine(machine *clusterv1.Machine) error {
+	if machine.ObjectMeta.Name == "" {
+		if machine.ObjectMeta.GenerateName == "" {
+			return fmt.Errorf("Machine configuration contains neither name or generate-name")
+		}
+		name := fmt.Sprintf("%s%s", machine.ObjectMeta.GenerateName, util.RandomString(5))
+		machine.ObjectMeta.Name = name
+	}
+	return nil
+}
 
-	// is cluster configured alright?  If not configure it
-	clusterConfig, err := getClusterProviderConfig(cluster)
-	if err != nil {
-		return err
+// func (aws *AWSClient) GetIP(machine *clusterv1.Machine) (string, error) {
+
+// }
+
+func (aws *AWSClient) getAwsService(cluster *clusterv1.Cluster, machine *clusterv1.Machine) (*ec2.EC2, error) {
+	var region string
+	if cluster != nil {
+		clusterConfig, err := getClusterProviderConfig(cluster)
+		if err != nil {
+			return nil, err
+		}
+		if clusterConfig.Region == "" {
+			return nil, fmt.Errorf("Region not specified in cluster configuration")
+		}
+		region = clusterConfig.Region
+	} else {
+		if machine == nil {
+			return nil, fmt.Errorf("Cannot get sesssion for nil cluster and nil machine")
+		}
+		machineConfig, err := getMachineProviderConfig(machine)
+		if err != nil {
+			return nil, err
+		}
+		if machineConfig.Region == "" {
+			return nil, fmt.Errorf("Region not specified in machine configuration")
+		}
+		region = machineConfig.Region
 	}
-	if clusterConfig.Region == "" {
-		return fmt.Errorf("Region not specified in cluster configuration")
-	}
-	fmt.Printf("%s\n", clusterConfig.Region)
 	config := &awssdk.Config{
-		Region:      awssdk.String(clusterConfig.Region),
+		Region:      awssdk.String(region),
 		Credentials: aws.awsCredentials,
 	}
 
 	sdkSession, err := session.NewSession(config)
+	if err != nil {
+		return nil, err
+	}
 	svc := ec2.New(sdkSession)
+	return svc, nil
+}
+
+func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Machine) error {
+
+	svc, err := aws.getAwsService(cluster, machine)
+	if err != nil {
+		return err
+	}
 
 	// does machine already exist
+	err = validateMachine(machine)
+	if err != nil {
+		return err
+	}
 	machineConfig, err := getMachineProviderConfig(machine)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s\n", machineConfig.Region)
+	// fmt.Printf("%s\n", machine.ObjectMeta.Name)
+	// fmt.Printf("%s\n", machine.ObjectMeta.GenerateName)
 
 	//	targetVpcName := "cluster-api-aws"
+	clusterConfig, _ := getClusterProviderConfig(cluster)
 	targetVpcName := clusterConfig.VpcName
 
 	var vpc *ec2.Vpc
@@ -191,6 +242,8 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if *vpc.CidrBlock != clusterConfig.VpcCIDR {
 		return fmt.Errorf("VPC %s cidr (%s) does not match requested cidr (%s)", targetVpcName, *vpc.CidrBlock, clusterConfig.VpcCIDR)
 	}
+
+	// return fmt.Errorf("stop")
 
 	var subnet *ec2.Subnet
 	subnets, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
@@ -225,7 +278,7 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		Filters: []*ec2.Filter{
 			&ec2.Filter{
 				Name:   awssdk.String("group-name"),
-				Values: []*string{awssdk.String("cluster-api-aws")},
+				Values: []*string{awssdk.String(targetVpcName)},
 			},
 		},
 	})
@@ -233,47 +286,36 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return err
 	}
 	if len(groups.SecurityGroups) == 0 {
-		return fmt.Errorf("unable to look up security groups")
+		return fmt.Errorf("unable to look up security groups for name %s", targetVpcName)
 	}
+	sg := groups.SecurityGroups[0]
 
-	networkSpec := &ec2.InstanceNetworkInterfaceSpecification{
+	// sgResponse, err := svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+	// 	GroupName: awssdk.String(clusterConfig.VpcName),
+	// 	VpcId:     vpc.VpcId,
+	// })
 
-		DeviceIndex: awssdk.Int64(0),
-
-		// Indicates whether to assign a public IPv4 address to an instance you launch
-		// in a VPC. The public IP address can only be assigned to a network interface
-		// for eth0, and can only be assigned to a new network interface, not an existing
-		// one. You cannot specify more than one network interface in the request. If
-		// launching into a default subnet, the default value is true.
-		AssociatePublicIpAddress: awssdk.Bool(true),
-
-		// If set to true, the interface is deleted when the instance is terminated.
-		// You can specify true only if creating a new network interface when launching
-		// an instance.
-		DeleteOnTermination: awssdk.Bool(true),
-
-		// The IDs of the security groups for the network interface. Applies only if
-		// creating a network interface when launching an instance.
-		Groups: []*string{awssdk.String("sg-59bda825")},
-
-		// The ID of the subnet associated with the network string. Applies only if
-		// creating a network interface when launching an instance.
-		SubnetId: subnet.SubnetId,
-	}
-
-	// curl https://coreos.com/dist/aws/aws-stable.json | jq .
-	// --> for example,
-	// },
-	// "us-west-1": {
-	// "hvm": "ami-e0696980",
-	// "pv": "ami-6e68680e"
-	// },
-	// "us-west-2": {
-	// "hvm": "ami-dc4ce6a4",
-	// "pv": "ami-3746ec4f"
+	// sgRules :=  &AuthorizeSecurityGroupIngressInput  {
+	// 	CidrIp    *string    `type:"string"`
+	// 	FromPort    *int64    `type:"integer"`
+	// 	GroupId    *string    `type:"string"`
+	// 	GroupName    *string    `type:"string"`
+	// 	IpPermissions    []*IpPermission    `locationNameList:"item" type:"list"`
+	// 	IpProtocol    *string    `type:"string"`
+	// 	SourceSecurityGroupName    *string    `type:"string"`
+	// 	SourceSecurityGroupOwnerId    *string    `type:"string"`
+	// 	ToPort    *int64    `type:"integer"`
 	// }
 
-	// or consult https://cloud-images.ubuntu.com/locator/ec2/
+	networkSpec := &ec2.InstanceNetworkInterfaceSpecification{
+		DeviceIndex:              awssdk.Int64(0),
+		AssociatePublicIpAddress: awssdk.Bool(true),
+		DeleteOnTermination:      awssdk.Bool(true),
+		Groups:                   []*string{sg.GroupId},
+		SubnetId:                 subnet.SubnetId,
+	}
+
+	// ubuntu AMIs - consult https://cloud-images.ubuntu.com/locator/ec2/
 
 	userData, err := GetCloudConfig(aws.kubeadmToken, cluster, machine)
 	if err != nil {
@@ -281,16 +323,25 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	}
 	b64UserData := base64.StdEncoding.EncodeToString([]byte(userData))
 
-	// kp := &ec2.ImportKeyPairInput{
-	// 	KeyName:           awssdk.String("key-3df566133f69"),
-	// 	PublicKeyMaterial: []byte("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDHyz2moQ66ycWjfShpbk3y1GpaAQR2NB3UuauR1O4UKZBdxsrFzrirli6d/q0krt3A/+xCYiLszCiyLcGRzjuwMkY2a7A1kzkh1bprfwAvSY1lyhyqNEA4UmhOczz46+j7shkI8NOn7+b7eYieA0veNSEsDAJwaQBJZ4u8H1012m5O6/KwiA5Flo6D3NbGQmfuKwpV6t5iAzV1so8AaDtsl2rIVqbKEDFRJxOLI0VLpNPc0fs+acRJP928u/gDghW+TeOpKsvPFGQe/WuwKBseLlRKEXPX4wzQAh99iQMj/PiTrGll+TdS2mqTzV332ABtwxKcA2MeM89x8EO2nM6j nfranzen@esox"),
-	// }
-
-	// resp, err := svc.ImportKeyPair(kp)
-	// if err != nil {
-	// 	return err
-	// }
-	// fmt.Printf("%s\n", *resp.KeyName)
+	// set up ssh key in AWS if not already present
+	sshKeyName := fmt.Sprintf("sshkey-%s", cluster.ObjectMeta.Name)
+	keypairs, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		KeyNames: []*string{awssdk.String(sshKeyName)},
+	})
+	if err != nil || len(keypairs.KeyPairs) == 0 {
+		content, err := ioutil.ReadFile(aws.sshCreds.publicKeyPath)
+		if err != nil {
+			return err
+		}
+		kp := &ec2.ImportKeyPairInput{
+			KeyName:           awssdk.String(sshKeyName),
+			PublicKeyMaterial: content,
+		}
+		_, err = svc.ImportKeyPair(kp)
+		if err != nil {
+			return err
+		}
+	}
 
 	tags := []*ec2.TagSpecification{
 		&ec2.TagSpecification{
@@ -298,17 +349,18 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 			Tags: []*ec2.Tag{
 				&ec2.Tag{
 					Key:   awssdk.String("Name"),
-					Value: awssdk.String("cluster-api-aws-instance"),
+					Value: awssdk.String(machine.ObjectMeta.Name),
 				},
 			},
 		},
 	}
 
+	// return fmt.Errorf("stop")
+
 	runResult, err := svc.RunInstances(&ec2.RunInstancesInput{
-		ImageId:      awssdk.String(machineConfig.Image),
-		InstanceType: awssdk.String(machineConfig.MachineType),
-		// SubnetId:          subnet.SubnetId,
-		KeyName:           awssdk.String("key-3df566133f69"),
+		ImageId:           awssdk.String(machineConfig.Image),
+		InstanceType:      awssdk.String(machineConfig.MachineType),
+		KeyName:           awssdk.String(sshKeyName),
 		NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{networkSpec},
 		MinCount:          awssdk.Int64(1),
 		MaxCount:          awssdk.Int64(1),
@@ -324,155 +376,53 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return fmt.Errorf("seems weird")
 	}
 
-	fmt.Printf("%v\n", runResult.Instances[0].PublicIpAddress)
-	return nil
+	// fmt.Printf("%v\n", runResult.Instances[0].State)
+	instanceID := runResult.Instances[0].InstanceId
 
-	// return fmt.Errorf("Stopping here")
+	statusRequest := &ec2.DescribeInstanceStatusInput{
+		InstanceIds:         []*string{instanceID},
+		IncludeAllInstances: awssdk.Bool(true),
+	}
+	err = util.WaitForCondition(
+		5*time.Second,
+		10*time.Minute,
+		"Instance in running state",
+		func() (bool, error) {
+			status, err := svc.DescribeInstanceStatus(statusRequest)
+			if err != nil {
+				return false, err
+			}
+			if len(status.InstanceStatuses) == 0 {
+				return false, fmt.Errorf("Instance %s not found", *instanceID)
+			}
+			fmt.Printf("%s Status: %s\n", *instanceID, *status.InstanceStatuses[0].InstanceState.Name)
+			if "running" == *status.InstanceStatuses[0].InstanceState.Name {
+				return true, nil
+			}
+			return false, nil
+		})
 
-	// config, err := gce.providerconfig(machine.Spec.ProviderConfig)
-	// if err != nil {
-	// 	return gce.handleMachineError(machine, apierrors.InvalidMachineConfiguration(
-	// 		"Cannot unmarshal providerConfig field: %v", err))
-	// }
+	if err != nil {
+		return err
+	}
 
-	// if verr := gce.validateMachine(machine, config); verr != nil {
-	// 	return gce.handleMachineError(machine, verr)
-	// }
-
-	// var metadata map[string]string
-	// if cluster.Spec.ClusterNetwork.DNSDomain == "" {
-	// 	return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.DNSDomain")
-	// }
-	// if getSubnet(cluster.Spec.ClusterNetwork.Pods) == "" {
-	// 	return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.Pods")
-	// }
-	// if getSubnet(cluster.Spec.ClusterNetwork.Services) == "" {
-	// 	return errors.New("invalid cluster configuration: missing Cluster.Spec.ClusterNetwork.Services")
-	// }
-	// if machine.Spec.Versions.Kubelet == "" {
-	// 	return errors.New("invalid master configuration: missing Machine.Spec.Versions.Kubelet")
-	// }
-
-	// image, preloaded := gce.getImage(machine, config)
-
-	// if apiutil.IsMaster(machine) {
-	// 	if machine.Spec.Versions.ControlPlane == "" {
-	// 		return gce.handleMachineError(machine, apierrors.InvalidMachineConfiguration(
-	// 			"invalid master configuration: missing Machine.Spec.Versions.ControlPlane"))
-	// 	}
-	// 	var err error
-	// 	metadata, err = masterMetadata(
-	// 		templateParams{
-	// 			Token:     gce.kubeadmToken,
-	// 			Cluster:   cluster,
-	// 			Machine:   machine,
-	// 			Preloaded: preloaded,
-	// 		},
-	// 	)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// } else {
-	// 	if len(cluster.Status.APIEndpoints) == 0 {
-	// 		return errors.New("invalid cluster state: cannot create a Kubernetes node without an API endpoint")
-	// 	}
-	// 	var err error
-	// 	metadata, err = nodeMetadata(
-	// 		templateParams{
-	// 			Token:     gce.kubeadmToken,
-	// 			Cluster:   cluster,
-	// 			Machine:   machine,
-	// 			Preloaded: preloaded,
-	// 		},
-	// 	)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
-
-	// var metadataItems []*compute.MetadataItems
-	// for k, v := range metadata {
-	// 	v := v // rebind scope to avoid loop aliasing below
-	// 	metadataItems = append(metadataItems, &compute.MetadataItems{
-	// 		Key:   k,
-	// 		Value: &v,
-	// 	})
-	// }
-
-	// instance, err := gce.instanceIfExists(machine)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// name := machine.ObjectMeta.Name
-	// project := config.Project
-	// zone := config.Zone
-	// diskSize := int64(10)
-
-	// // Our preloaded image already has a lot stored on it, so increase the
-	// // disk size to have more free working space.
-	// if preloaded {
-	// 	diskSize = 30
-	// }
-
-	// if instance == nil {
-	// 	labels := map[string]string{
-	// 		UIDLabelKey: fmt.Sprintf("%v", machine.ObjectMeta.UID),
-	// 	}
-	// 	if gce.machineClient == nil {
-	// 		labels[BootstrapLabelKey] = "true"
-	// 	}
-
-	// 	op, err := gce.service.Instances.Insert(project, zone, &compute.Instance{
-	// 		Name:        name,
-	// 		MachineType: fmt.Sprintf("zones/%s/machineTypes/%s", zone, config.MachineType),
-	// 		NetworkInterfaces: []*compute.NetworkInterface{
-	// 			{
-	// 				Network: "global/networks/default",
-	// 				AccessConfigs: []*compute.AccessConfig{
-	// 					{
-	// 						Type: "ONE_TO_ONE_NAT",
-	// 						Name: "External NAT",
-	// 					},
-	// 				},
-	// 			},
-	// 		},
-	// 		Disks: []*compute.AttachedDisk{
-	// 			{
-	// 				AutoDelete: true,
-	// 				Boot:       true,
-	// 				InitializeParams: &compute.AttachedDiskInitializeParams{
-	// 					SourceImage: image,
-	// 					DiskSizeGb:  diskSize,
-	// 				},
-	// 			},
-	// 		},
-	// 		Metadata: &compute.Metadata{
-	// 			Items: metadataItems,
-	// 		},
-	// 		Tags: &compute.Tags{
-	// 			Items: []string{"https-server"},
-	// 		},
-	// 		Labels: labels,
-	// 	}).Do()
-
-	// 	if err == nil {
-	// 		err = gce.waitForOperation(config, op)
-	// 	}
-
-	// 	if err != nil {
-	// 		return gce.handleMachineError(machine, apierrors.CreateMachine(
-	// 			"error creating GCE instance: %v", err))
-	// 	}
-
-	// 	// If we have a machineClient, then annotate the machine so that we
-	// 	// remember exactly what VM we created for it.
-	// 	if gce.machineClient != nil {
-	// 		return gce.updateAnnotations(machine)
-	// 	}
-	// } else {
-	// 	glog.Infof("Skipped creating a VM that already exists.\n")
-	// }
+	// lookup by name ... getting the public ip.  This *is* the canonical way to get an instance by the name tag
+	instanceRequest := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			&ec2.Filter{
+				Name:   awssdk.String("tag:Name"),
+				Values: []*string{awssdk.String(machine.ObjectMeta.Name)},
+			},
+		},
+	}
+	instances, err := svc.DescribeInstances(instanceRequest)
+	if len(instances.Reservations) != 1 {
+		return fmt.Errorf("Failed to lookup single instance reservation for name %s", machine.ObjectMeta.Name)
+	}
+	if len(instances.Reservations[0].Instances) != 1 {
+		return fmt.Errorf("Failed to lookup single instance for name %s", machine.ObjectMeta.Name)
+	}
+	fmt.Printf("%s Status: %s\n", *instanceID, *instances.Reservations[0].Instances[0].PublicIpAddress)
 
 	return nil
 }

@@ -6,11 +6,13 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"k8s.io/kube-deploy/cluster-api-aws/cloud/aws"
+	"k8s.io/kube-deploy/cluster-api-aws/util"
 )
 
 type TestOptions struct {
-	Cluster string
-	Machine string
+	Cluster    string
+	Machine    string
+	SshKeyPath string
 }
 
 var opts = &TestOptions{}
@@ -30,6 +32,11 @@ var testCmd = &cobra.Command{
 			cmd.Help()
 			os.Exit(1)
 		}
+		if opts.SshKeyPath == "" {
+			glog.Error("Please provide a path containing public and private ssh keys")
+			cmd.Help()
+			os.Exit(1)
+		}
 		if err := actuate(opts); err != nil {
 			glog.Exit(err)
 		}
@@ -37,7 +44,7 @@ var testCmd = &cobra.Command{
 }
 
 func actuate(opts *TestOptions) error {
-	a, err := aws.NewMachineActuator("", nil)
+	a, err := aws.NewMachineActuator(util.RandomToken(), opts.SshKeyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -60,6 +67,7 @@ func actuate(opts *TestOptions) error {
 func init() {
 	testCmd.Flags().StringVarP(&opts.Cluster, "cluster", "c", "", "cluster yaml file")
 	testCmd.Flags().StringVarP(&opts.Machine, "machines", "m", "", "machine yaml file")
+	testCmd.Flags().StringVarP(&opts.SshKeyPath, "sshkey", "s", "", "ssh key directory")
 
 	RootCmd.AddCommand(testCmd)
 }

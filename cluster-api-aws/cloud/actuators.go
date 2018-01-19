@@ -21,9 +21,9 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/kube-deploy/cluster-api-aws/cloud/aws"
 	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api/client"
-	"k8s.io/kube-deploy/cluster-api-aws/cloud/aws"
 )
 
 // An actuator that just logs instead of doing anything.
@@ -35,10 +35,10 @@ kind: config
 preferences: {}
 `
 
-func NewMachineActuator(cloud string, kubeadmToken string, machineClient client.MachinesInterface) (MachineActuator, error) {
+func NewMachineActuator(cloud string, kubeadmToken string, sshKeyPath string, machineClient client.MachinesInterface) (MachineActuator, error) {
 	switch cloud {
 	case "aws":
-		return aws.NewMachineActuator(kubeadmToken, machineClient)
+		return aws.NewMachineActuator(kubeadmToken, sshKeyPath, machineClient)
 	case "test", "azure":
 		return &loggingMachineActuator{}, nil
 	default:
