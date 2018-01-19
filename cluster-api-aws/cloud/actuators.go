@@ -35,11 +35,11 @@ kind: config
 preferences: {}
 `
 
-func NewMachineActuator(cloud string, kubeadmToken string, sshKeyPath string, machineClient client.MachinesInterface) (MachineActuator, error) {
+func NewMachineActuator(cloud string, sshKeyPath string, kubeadmToken string, machineClient client.MachinesInterface) (MachineActuator, error) {
 	switch cloud {
 	case "aws":
 		return aws.NewMachineActuator(kubeadmToken, sshKeyPath, machineClient)
-	case "test", "azure":
+	case "test", "azure", "google":
 		return &loggingMachineActuator{}, nil
 	default:
 		return nil, fmt.Errorf("Not recognized cloud provider: %s\n", cloud)

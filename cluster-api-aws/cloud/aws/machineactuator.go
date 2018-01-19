@@ -90,6 +90,14 @@ type AWSClient struct {
 	machineClient  client.MachinesInterface
 }
 
+// placeholder, preparing for multiple secure ways to obtain credentials
+func getCloudCredentials(cloudProvider string) (interface{}, error) {
+	if cloudProvider == "aws" {
+		return credentials.NewEnvCredentials(), nil
+	}
+	return nil, fmt.Errorf("Unsupported provider: %s", cloudProvider)
+}
+
 func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.MachinesInterface) (*AWSClient, error) {
 
 	sshCreds := SshCreds{
@@ -104,8 +112,17 @@ func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.Ma
 		return nil, fmt.Errorf("Problem acesssing file path %s", sshCreds.privateKeyPath)
 	}
 
+	cloudCredentials, err := getCloudCredentials("aws")
+	if err != nil {
+		return nil, err
+	}
+	awsCredentials, ok := cloudCredentials.(*credentials.Credentials)
+	if !ok {
+		return nil, fmt.Errorf("Can't obtain AWS credentials")
+	}
+
 	return &AWSClient{
-		awsCredentials: credentials.NewEnvCredentials(),
+		awsCredentials: awsCredentials,
 		kubeadmToken:   kubeadmToken,
 		sshCreds:       sshCreds,
 	}, nil
@@ -131,20 +148,55 @@ func getMachineProviderConfig(machine *clusterv1.Machine) (*awsv1alpha1.AWSMachi
 }
 
 // Delete the machine.
-func (aws *AWSClient) Delete(*clusterv1.Machine) error {
-	return fmt.Errorf("Delete - NotYetImplemented")
+func (aws *AWSClient) Delete(machine *clusterv1.Machine) error {
+
+	instance, err := aws.getIfExists(machine)
+	if err != nil {
+		return err
+	}
+
+	if instance == nil {
+		glog.Infof("Skipped deleting a VM that is already deleted.\n")
+		return nil
+	}
+
+	svc, err := aws.getAwsService(nil, machine)
+	if err != nil {
+		return err
+	}
+
+	_, err = svc.TerminateInstances(&ec2.TerminateInstancesInput{
+		InstanceIds: []*string{instance.InstanceId},
+	})
+
+	return err
 }
 
 // Update the machine to the provided definition.
-func (aws *AWSClient) Update(c *clusterv1.Cluster, machine *clusterv1.Machine) error {
+func (aws *AWSClient) Update(c *clusterv1.Cluster, targetSpecMachine *clusterv1.Machine) error {
 	return fmt.Errorf("Update - NotYetImplemented")
+
+	// validate
+
+	// evaluate diff
+
+	// update
+
 }
 
-// Checks if the machine currently exists.
-func (aws *AWSClient) Exists(machine *clusterv1.Machine) (bool, error) {
+func (aws *AWSClient) CreateMachineController(cluster *clusterv1.Cluster, initialMachines []*clusterv1.Machine) error {
+	return fmt.Errorf("CreateMachineController - NotYetImplemented")
+}
+
+func (aws *AWSClient) PostDelete(cluster *clusterv1.Cluster, machines []*clusterv1.Machine) error {
+	return fmt.Errorf("PostDelete - NotYetImplemented")
+}
+
+func (aws *AWSClient) getIfExists(machine *clusterv1.Machine) (*ec2.Instance, error) {
+
 	svc, err := aws.getAwsService(nil, machine)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	// lookup by name
 	instanceRequest := &ec2.DescribeInstancesInput{
@@ -157,52 +209,43 @@ func (aws *AWSClient) Exists(machine *clusterv1.Machine) (bool, error) {
 	}
 	instances, err := svc.DescribeInstances(instanceRequest)
 	if len(instances.Reservations) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if len(instances.Reservations) > 1 {
-		return false, fmt.Errorf("Found multiple instance reservation for name %s", machine.ObjectMeta.Name)
+		return nil, fmt.Errorf("Found multiple instance reservation for name %s", machine.ObjectMeta.Name)
 	}
 	if len(instances.Reservations[0].Instances) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if len(instances.Reservations[0].Instances) > 1 {
-		return false, fmt.Errorf("Found multiple instances for name %s", machine.ObjectMeta.Name)
+		return nil, fmt.Errorf("Found multiple instances for name %s", machine.ObjectMeta.Name)
 	}
-	return true, nil
+	return instances.Reservations[0].Instances[0], nil
 }
 
-func (aws *AWSClient) CreateMachineController(cluster *clusterv1.Cluster, initialMachines []*clusterv1.Machine) error {
-	return fmt.Errorf("CreateMachineController - NotYetImplemented")
-}
-
-func (aws *AWSClient) PostDelete(cluster *clusterv1.Cluster, machines []*clusterv1.Machine) error {
-	return fmt.Errorf("PostDelete - NotYetImplemented")
+// Checks if the machine currently exists.
+func (aws *AWSClient) Exists(machine *clusterv1.Machine) (bool, error) {
+	instance, err := aws.getIfExists(machine)
+	if err != nil {
+		return false, err
+	}
+	if instance != nil {
+		return true, nil
+	}
+	return false, nil
 }
 
 // GetIP looks up the machine by name (tag) and finds the public ip
 func (aws *AWSClient) GetIP(machine *clusterv1.Machine) (string, error) {
-	svc, err := aws.getAwsService(nil, machine)
+
+	instance, err := aws.getIfExists(machine)
 	if err != nil {
 		return "", err
 	}
-
-	// lookup by name ... getting the public ip.  This *is* the canonical way to get an instance by the name tag
-	instanceRequest := &ec2.DescribeInstancesInput{
-		Filters: []*ec2.Filter{
-			&ec2.Filter{
-				Name:   awssdk.String("tag:Name"),
-				Values: []*string{awssdk.String(machine.ObjectMeta.Name)},
-			},
-		},
+	if instance == nil {
+		return "", fmt.Errorf("Instance not found for name %s", machine.ObjectMeta.Name)
 	}
-	instances, err := svc.DescribeInstances(instanceRequest)
-	if len(instances.Reservations) != 1 {
-		return "", fmt.Errorf("Failed to lookup single instance reservation for name %s", machine.ObjectMeta.Name)
-	}
-	if len(instances.Reservations[0].Instances) != 1 {
-		return "", fmt.Errorf("Failed to lookup single instance for name %s", machine.ObjectMeta.Name)
-	}
-	ip := instances.Reservations[0].Instances[0].PublicIpAddress
+	ip := instance.PublicIpAddress
 	if ip == nil {
 		return "", fmt.Errorf("Public IP address is nil for instance name %s", machine.ObjectMeta.Name)
 	}
