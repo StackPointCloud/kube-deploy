@@ -17,8 +17,8 @@ items:
         "machineType": "t2.medium"
       }
     versions:
-      kubelet: 1.7.4
-      controlPlane: 1.7.4
+      kubelet: 1.8.7
+      controlPlane: 1.8.7
       containerRuntime:
         name: docker
         version: 1.12.0

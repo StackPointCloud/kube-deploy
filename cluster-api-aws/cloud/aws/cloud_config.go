@@ -114,6 +114,9 @@ apt-get install -y \
     kubeadm=${KUBEADM} \
     kubernetes-cni=0.5.1-00
 
+# kubernetes-cni=0.6.0-00
+
+
 mv /usr/bin/kubeadm.dl /usr/bin/kubeadm
 chmod a+rx /usr/bin/kubeadm
 
@@ -128,6 +131,9 @@ echo $PRIVATEIP > /tmp/.ip
 
 PUBLICIP=$(curl --retry 5 -sf http://169.254.169.254/latest/meta-data/public-ipv4)
 
+# preflight check _sometimes_ finds non-empty directory here? ([preflight] Some fatal errors occurred:)
+rm -rf /var/lib/kubelet/*
+
 kubeadm init --apiserver-bind-port ${PORT} --token ${TOKEN} --kubernetes-version v${CONTROL_PLANE_VERSION} \
              --apiserver-advertise-address ${PUBLICIP} --apiserver-cert-extra-sans ${PUBLICIP} ${PRIVATEIP} \
              --service-cidr ${SERVICE_CIDR}
@@ -141,6 +147,9 @@ for tries in $(seq 1 60); do
 	kubectl --kubeconfig /etc/kubernetes/kubelet.conf annotate --overwrite node $(hostname) machine=${MACHINE} && break
 	sleep 1
 done
+
+# make kubeconfig accessible for copying
+chmod 0644 /etc/kubernetes/admin.conf 
 
 {{- end }} {{/* end configure */}}
 `

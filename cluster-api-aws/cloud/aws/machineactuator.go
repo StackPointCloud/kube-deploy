@@ -22,7 +22,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path"
+	"regexp"
+	"strings"
 	"time"
 
 	awsv1alpha1 "k8s.io/kube-deploy/cluster-api-aws/cloud/aws/awsproviderconfig/v1alpha1"
@@ -32,6 +35,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/golang/glog"
 
 	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 	"k8s.io/kube-deploy/cluster-api/client"
@@ -86,26 +90,10 @@ type AWSClient struct {
 	machineClient  client.MachinesInterface
 }
 
-// CreateVolume creates a volume wwith hard-coded parameters, reuurn the volumeID
-// https://github.com/aws/aws-sdk-go/blob/master/service/ec2/api.go#L21779-L21838
-func (sess *Session) CreateVolume(volumeType string, sizeGB int64) (string, error) {
-	var spec ec2.CreateVolumeInput
-	spec.SetAvailabilityZone(sess.Zone)
-	spec.SetVolumeType(volumeType)
-	spec.SetSize(sizeGB)
-	spec.SetEncrypted(false)
-
-	svc := ec2.New(sess.Session)
-	volume, err := svc.CreateVolume(&spec)
-	if err != nil {
-		return "", err
-	}
-	return *volume.VolumeId, nil
-}
-
-func NewMachineActuator(kubeadmToken string, sshKeyPath string, machineClient client.MachinesInterface) (*AWSClient, error) {
+func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.MachinesInterface) (*AWSClient, error) {
 
 	sshCreds := SshCreds{
+		user:           "ubuntu",
 		privateKeyPath: path.Join(sshKeyPath, "id_rsa"),
 		publicKeyPath:  path.Join(sshKeyPath, "id_rsa.pub"),
 	}
@@ -125,11 +113,8 @@ func NewMachineActuator(kubeadmToken string, sshKeyPath string, machineClient cl
 }
 
 func getClusterProviderConfig(cluster *clusterv1.Cluster) (*awsv1alpha1.AWSClusterProviderConfig, error) {
-
 	var config awsv1alpha1.AWSClusterProviderConfig
-
-	fmt.Printf("%s\n", cluster.Spec.ProviderConfig)
-
+	// fmt.Printf("%s\n", cluster.Spec.ProviderConfig)
 	if err := json.Unmarshal([]byte(cluster.Spec.ProviderConfig), &config); err != nil {
 		return nil, err
 	}
@@ -138,29 +123,93 @@ func getClusterProviderConfig(cluster *clusterv1.Cluster) (*awsv1alpha1.AWSClust
 
 func getMachineProviderConfig(machine *clusterv1.Machine) (*awsv1alpha1.AWSMachineProviderConfig, error) {
 	var config awsv1alpha1.AWSMachineProviderConfig
-	fmt.Printf("%s\n", machine.Spec.ProviderConfig)
-
+	// fmt.Printf("%s\n", machine.Spec.ProviderConfig)
 	if err := json.Unmarshal([]byte(machine.Spec.ProviderConfig), &config); err != nil {
 		return nil, err
 	}
 	return &config, nil
 }
 
-func validateMachine(machine *clusterv1.Machine) error {
-	if machine.ObjectMeta.Name == "" {
-		if machine.ObjectMeta.GenerateName == "" {
-			return fmt.Errorf("Machine configuration contains neither name or generate-name")
-		}
-		name := fmt.Sprintf("%s%s", machine.ObjectMeta.GenerateName, util.RandomString(5))
-		machine.ObjectMeta.Name = name
-	}
-	return nil
+// Delete the machine.
+func (aws *AWSClient) Delete(*clusterv1.Machine) error {
+	return fmt.Errorf("Delete - NotYetImplemented")
 }
 
-// func (aws *AWSClient) GetIP(machine *clusterv1.Machine) (string, error) {
+// Update the machine to the provided definition.
+func (aws *AWSClient) Update(c *clusterv1.Cluster, machine *clusterv1.Machine) error {
+	return fmt.Errorf("Update - NotYetImplemented")
+}
 
-// }
+// Checks if the machine currently exists.
+func (aws *AWSClient) Exists(machine *clusterv1.Machine) (bool, error) {
+	svc, err := aws.getAwsService(nil, machine)
+	if err != nil {
+		return false, err
+	}
+	// lookup by name
+	instanceRequest := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			&ec2.Filter{
+				Name:   awssdk.String("tag:Name"),
+				Values: []*string{awssdk.String(machine.ObjectMeta.Name)},
+			},
+		},
+	}
+	instances, err := svc.DescribeInstances(instanceRequest)
+	if len(instances.Reservations) == 0 {
+		return false, nil
+	}
+	if len(instances.Reservations) > 1 {
+		return false, fmt.Errorf("Found multiple instance reservation for name %s", machine.ObjectMeta.Name)
+	}
+	if len(instances.Reservations[0].Instances) == 0 {
+		return false, nil
+	}
+	if len(instances.Reservations[0].Instances) > 1 {
+		return false, fmt.Errorf("Found multiple instances for name %s", machine.ObjectMeta.Name)
+	}
+	return true, nil
+}
 
+func (aws *AWSClient) CreateMachineController(cluster *clusterv1.Cluster, initialMachines []*clusterv1.Machine) error {
+	return fmt.Errorf("CreateMachineController - NotYetImplemented")
+}
+
+func (aws *AWSClient) PostDelete(cluster *clusterv1.Cluster, machines []*clusterv1.Machine) error {
+	return fmt.Errorf("PostDelete - NotYetImplemented")
+}
+
+// GetIP looks up the machine by name (tag) and finds the public ip
+func (aws *AWSClient) GetIP(machine *clusterv1.Machine) (string, error) {
+	svc, err := aws.getAwsService(nil, machine)
+	if err != nil {
+		return "", err
+	}
+
+	// lookup by name ... getting the public ip.  This *is* the canonical way to get an instance by the name tag
+	instanceRequest := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			&ec2.Filter{
+				Name:   awssdk.String("tag:Name"),
+				Values: []*string{awssdk.String(machine.ObjectMeta.Name)},
+			},
+		},
+	}
+	instances, err := svc.DescribeInstances(instanceRequest)
+	if len(instances.Reservations) != 1 {
+		return "", fmt.Errorf("Failed to lookup single instance reservation for name %s", machine.ObjectMeta.Name)
+	}
+	if len(instances.Reservations[0].Instances) != 1 {
+		return "", fmt.Errorf("Failed to lookup single instance for name %s", machine.ObjectMeta.Name)
+	}
+	ip := instances.Reservations[0].Instances[0].PublicIpAddress
+	if ip == nil {
+		return "", fmt.Errorf("Public IP address is nil for instance name %s", machine.ObjectMeta.Name)
+	}
+	return *ip, nil
+}
+
+// getAwsService obtains a service for the credentials and region of the cluster or machine
 func (aws *AWSClient) getAwsService(cluster *clusterv1.Cluster, machine *clusterv1.Machine) (*ec2.EC2, error) {
 	var region string
 	if cluster != nil {
@@ -205,11 +254,6 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return err
 	}
 
-	// does machine already exist
-	err = validateMachine(machine)
-	if err != nil {
-		return err
-	}
 	machineConfig, err := getMachineProviderConfig(machine)
 	if err != nil {
 		return err
@@ -406,34 +450,21 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return err
 	}
 
-	// lookup by name ... getting the public ip.  This *is* the canonical way to get an instance by the name tag
-	instanceRequest := &ec2.DescribeInstancesInput{
-		Filters: []*ec2.Filter{
-			&ec2.Filter{
-				Name:   awssdk.String("tag:Name"),
-				Values: []*string{awssdk.String(machine.ObjectMeta.Name)},
-			},
-		},
+	ip, err := aws.GetIP(machine)
+	if err != nil {
+		return err
 	}
-	instances, err := svc.DescribeInstances(instanceRequest)
-	if len(instances.Reservations) != 1 {
-		return fmt.Errorf("Failed to lookup single instance reservation for name %s", machine.ObjectMeta.Name)
-	}
-	if len(instances.Reservations[0].Instances) != 1 {
-		return fmt.Errorf("Failed to lookup single instance for name %s", machine.ObjectMeta.Name)
-	}
-	fmt.Printf("%s Status: %s\n", *instanceID, *instances.Reservations[0].Instances[0].PublicIpAddress)
-
+	fmt.Printf("Ip address is %s\n", ip)
 	return nil
 }
 
-// func (gce *AWSClient) handleMachineError(machine *clusterv1.Machine, err *apierrors.MachineError) error {
-// 	if gce.machineClient != nil {
+// func (aws *AWSClient) handleMachineError(machine *clusterv1.Machine, err *apierrors.MachineError) error {
+// 	if aws.machineClient != nil {
 // 		reason := err.Reason
 // 		message := err.Message
 // 		machine.Status.ErrorReason = &reason
 // 		machine.Status.ErrorMessage = &message
-// 		gce.machineClient.Update(machine)
+// 		aws.machineClient.Update(machine)
 // 	}
 
 // 	glog.Errorf("Machine error: %v", err.Message)
@@ -462,3 +493,39 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 // 	}
 // 	return netRange.CIDRBlocks[0]
 // }
+
+func (aws *AWSClient) remoteSshCommand(m *clusterv1.Machine, cmd string) (string, error) {
+	glog.Infof("Remote SSH execution '%s' on %s", cmd, m.ObjectMeta.Name)
+
+	publicIP, err := aws.GetIP(m)
+	if err != nil {
+		return "", err
+	}
+
+	command := fmt.Sprintf("echo STARTFILE; %s", cmd)
+	c := exec.Command("ssh", "-o", "StrictHostKeyChecking no", "-i", aws.sshCreds.privateKeyPath, aws.sshCreds.user+"@"+publicIP, command)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("error: %v, output: %s", err, string(out))
+	}
+	result := strings.TrimSpace(string(out))
+	parts := strings.Split(result, "STARTFILE")
+	if len(parts) != 2 {
+		return "", nil
+	}
+	// TODO: Check error.
+	return strings.TrimSpace(parts[1]), nil
+}
+
+func (aws *AWSClient) GetKubeConfig(master *clusterv1.Machine) (string, error) {
+
+	command := "sudo cat /etc/kubernetes/admin.conf"
+	config, err := aws.remoteSshCommand(master, command)
+	if err != nil {
+		return "", err
+	}
+	// remove text before start of config
+	re := regexp.MustCompile("apiVersion: ")
+	offsets := re.FindStringIndex(config)
+	return config[offsets[0]:], nil
+}
