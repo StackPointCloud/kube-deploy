@@ -60,16 +60,16 @@ func (d *deployer) createCluster(c *clusterv1.Cluster, machines []*clusterv1.Mac
 		return fmt.Errorf("unable to validate master machine: %v", err)
 	}
 
-	fmt.Printf("Starting cluster creation %s\n", c.GetName())
+	glog.Infof("Starting cluster creation %s\n", c.GetName())
 
-	fmt.Printf("Starting master creation %s\n", master.GetName())
+	glog.Infof("Starting master creation %s\n", master.GetName())
 
 	if err := d.machineDeployer.Create(c, master); err != nil {
 		return err
 	}
 
 	*vmCreated = true
-	fmt.Printf("Created master %s", master.GetName())
+	glog.Infof("Created master %s", master.GetName())
 
 	masterIP, err := d.getMasterIP(master)
 	if err != nil {
@@ -86,7 +86,7 @@ func (d *deployer) createCluster(c *clusterv1.Cluster, machines []*clusterv1.Mac
 		return fmt.Errorf("unable to write kubeconfig: %v", err)
 	}
 
-	fmt.Println("Waiting for apiserver to become healthy...")
+	glog.Infof("Waiting for apiserver to become healthy...")
 	if err := d.waitForApiserver(masterIP, 1*time.Minute); err != nil {
 		return fmt.Errorf("apiserver never came up: %v", err)
 	}
@@ -94,9 +94,9 @@ func (d *deployer) createCluster(c *clusterv1.Cluster, machines []*clusterv1.Mac
 	if err := d.initApiClient(); err != nil {
 		return err
 	}
-	fmt.Println("Starting the machine controller...")
+	glog.Infof("Starting the machine controller...")
 	if err := d.machineDeployer.CreateMachineController(c, machines); err != nil {
-		fmt.Printf("uhoh, can't create machine controller: %v.  Try something else :)", err)
+		glog.Infof("uhoh, can't create machine controller: %v.  Try something else :)", err)
 		// return fmt.Errorf("can't create machine controller: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func (d *deployer) createMachines(machines []*clusterv1.Machine) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Added machine [%s]", m.Name)
+		glog.Infof("Added machine [%s]", m.Name)
 	}
 	return nil
 }
@@ -190,7 +190,7 @@ func (d *deployer) deleteAllMachines() error {
 		if err := d.delete(m.Name); err != nil {
 			return err
 		}
-		fmt.Printf("Deleted machine object %s", m.Name)
+		glog.Infof("Deleted machine object %s", m.Name)
 	}
 	return nil
 }
@@ -237,7 +237,7 @@ func (d *deployer) copyKubeConfig(master *clusterv1.Machine) error {
 		var config string
 		var err error
 		if config, err = d.machineDeployer.GetKubeConfig(master); err != nil || config == "" {
-			fmt.Printf("Waiting for Kubernetes to come up...")
+			glog.Infof("Waiting for Kubernetes to come up...")
 			time.Sleep(time.Duration(SleepSecondsPerAttempt) * time.Second)
 			continue
 		}
@@ -267,7 +267,7 @@ func (d *deployer) writeConfigToDisk(config string) error {
 	defer file.Close()
 
 	file.Sync() // flush
-	fmt.Printf("wrote kubeconfig to [%s]", d.configPath)
+	glog.Infof("wrote kubeconfig to [%s]", d.configPath)
 	return nil
 }
 

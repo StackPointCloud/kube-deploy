@@ -131,7 +131,7 @@ func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.Ma
 
 func getClusterProviderConfig(cluster *clusterv1.Cluster) (*awsv1alpha1.AWSClusterProviderConfig, error) {
 	var config awsv1alpha1.AWSClusterProviderConfig
-	// fmt.Printf("%s\n", cluster.Spec.ProviderConfig)
+	// glog.Infof("%s", cluster.Spec.ProviderConfig)
 	if err := json.Unmarshal([]byte(cluster.Spec.ProviderConfig), &config); err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func getClusterProviderConfig(cluster *clusterv1.Cluster) (*awsv1alpha1.AWSClust
 
 func getMachineProviderConfig(machine *clusterv1.Machine) (*awsv1alpha1.AWSMachineProviderConfig, error) {
 	var config awsv1alpha1.AWSMachineProviderConfig
-	// fmt.Printf("%s\n", machine.Spec.ProviderConfig)
+	// glog.Infof("%s", machine.Spec.ProviderConfig)
 	if err := json.Unmarshal([]byte(machine.Spec.ProviderConfig), &config); err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (aws *AWSClient) Delete(machine *clusterv1.Machine) error {
 	}
 
 	if instance == nil {
-		glog.Infof("Skipped deleting a VM that is already deleted.\n")
+		glog.Infof("Skipped deleting a VM that is already deleted.")
 		return nil
 	}
 
@@ -301,8 +301,8 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if err != nil {
 		return err
 	}
-	// fmt.Printf("%s\n", machine.ObjectMeta.Name)
-	// fmt.Printf("%s\n", machine.ObjectMeta.GenerateName)
+	// glog.Infof("%s", machine.ObjectMeta.Name)
+	// glog.Infof("%s", machine.ObjectMeta.GenerateName)
 
 	//	targetVpcName := "cluster-api-aws"
 	clusterConfig, _ := getClusterProviderConfig(cluster)
@@ -318,7 +318,7 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		for _, tag := range v.Tags {
 			if *tag.Key == "Name" && *tag.Value == targetVpcName {
 				vpc = v
-				fmt.Printf("%s  %s  %s\n", *tag.Value, *v.CidrBlock, *v.VpcId)
+				glog.Infof("%s  %s  %s", *tag.Value, *v.CidrBlock, *v.VpcId)
 			}
 		}
 
@@ -463,7 +463,7 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return fmt.Errorf("seems weird")
 	}
 
-	// fmt.Printf("%v\n", runResult.Instances[0].State)
+	// glog.Infof("%v", runResult.Instances[0].State)
 	instanceID := runResult.Instances[0].InstanceId
 
 	statusRequest := &ec2.DescribeInstanceStatusInput{
@@ -482,7 +482,7 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 			if len(status.InstanceStatuses) == 0 {
 				return false, fmt.Errorf("Instance %s not found", *instanceID)
 			}
-			fmt.Printf("%s Status: %s\n", *instanceID, *status.InstanceStatuses[0].InstanceState.Name)
+			glog.Infof("%s Status: %s", *instanceID, *status.InstanceStatuses[0].InstanceState.Name)
 			if "running" == *status.InstanceStatuses[0].InstanceState.Name {
 				return true, nil
 			}
@@ -497,7 +497,7 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Ip address is %s\n", ip)
+	glog.Infof("Ip address is %s", ip)
 	return nil
 }
 
