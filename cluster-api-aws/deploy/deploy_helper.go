@@ -96,7 +96,7 @@ func (d *deployer) createCluster(c *clusterv1.Cluster, machines []*clusterv1.Mac
 	}
 	fmt.Println("Starting the machine controller...")
 	if err := d.machineDeployer.CreateMachineController(c, machines); err != nil {
-		fmt.Printf("uhoh, can't create machine controller: %v", err)
+		fmt.Printf("uhoh, can't create machine controller: %v.  Try something else :)", err)
 		// return fmt.Errorf("can't create machine controller: %v", err)
 	}
 

@@ -23,18 +23,31 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
+	"k8s.io/apiserver/pkg/util/logs"
 	"k8s.io/kube-deploy/cluster-api-aws/util"
 	clusterv1 "k8s.io/kube-deploy/cluster-api/api/cluster/v1alpha1"
 )
 
 var RootCmd = &cobra.Command{
 	Use:   "cluster-api-aws",
-	Short: "cluster-api-aws",
-	Long:  `cluster-api-aws`,
+	Short: "cluster management",
+	Long:  `Simple kubernetes cluster management`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Do Stuff Here
 		cmd.Help()
 	},
+}
+
+var (
+	kubeConfig string
+	sshKeyPath string
+	provider   string
+)
+
+func Execute() {
+	if err := RootCmd.Execute(); err != nil {
+		glog.Exit(err)
+	}
 }
 
 func parseClusterYaml(file string) (*clusterv1.Cluster, error) {
@@ -67,12 +80,11 @@ func parseMachinesYaml(file string) ([]*clusterv1.Machine, error) {
 	return util.MachineP(machines.Items), nil
 }
 
-func Execute() {
-	if err := RootCmd.Execute(); err != nil {
-		glog.Exit(err)
-	}
-}
-
 func init() {
+	RootCmd.PersistentFlags().StringVarP(&provider, "provider", "p", "aws", "cloud provider google/azure/aws")
+	RootCmd.PersistentFlags().StringVarP(&kubeConfig, "kubeconfig", "k", "./kubeconfig", "location for the kubernetes config file. If not provided, $HOME/.kube/config is used")
+	RootCmd.PersistentFlags().StringVarP(&sshKeyPath, "sshkey", "s", "", "ssh key directory")
+
 	flag.CommandLine.Parse([]string{})
+	logs.InitLogs()
 }

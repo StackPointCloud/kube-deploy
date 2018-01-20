@@ -243,7 +243,6 @@ func getSubnet(netRange clusterv1.NetworkRanges) string {
 func GetCloudConfig(token string, cluster *clusterv1.Cluster, machine *clusterv1.Machine) (string, error) {
 
 	// moved from init() for now
-
 	endpoint := func(apiEndpoint *clusterv1.APIEndpoint) string {
 		return fmt.Sprintf("%s:%d", apiEndpoint.Host, apiEndpoint.Port)
 	}

@@ -14,27 +14,30 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package awsproviderconfig
+package cmd
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/golang/glog"
+	"github.com/spf13/cobra"
+	"k8s.io/kube-deploy/cluster-api-aws/deploy"
 )
 
-type AWSMachineProviderConfig struct {
-	metav1.TypeMeta `json:",inline"`
-
-	Region string `json:"region"`
-	Zone   string `json:"zone"`
-
-	SubnetCIDR  string `json:"subnetCIDR"`
-	MachineType string `json:"machineType"`
-	Image       string `json:"image"`
+var deleteCmd = &cobra.Command{
+	Use:   "delete",
+	Short: "Delete kubernetes cluster",
+	Long:  `Delete a kubernetes cluster with one command`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := RunDelete(); err != nil {
+			glog.Exit(err)
+		}
+	},
 }
 
-type AWSClusterProviderConfig struct {
-	metav1.TypeMeta `json:",inline"`
+func RunDelete() error {
+	d := deploy.NewDeployer(provider, sshKeyPath, kubeConfig)
+	return d.DeleteCluster()
+}
 
-	VpcName string `json:"vpcName"`
-	VpcCIDR string `json:"vpcCIDR"`
-	Region  string `json:"region"`
+func init() {
+	RootCmd.AddCommand(deleteCmd)
 }

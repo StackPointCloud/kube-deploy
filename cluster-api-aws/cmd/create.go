@@ -25,14 +25,11 @@ import (
 )
 
 type CreateOptions struct {
-	Cluster        string
-	Machine        string
-	SSHKeyPath     string
-	KubeconfigPath string
+	Cluster string
+	Machine string
 }
 
 var co = &CreateOptions{}
-var provider = "aws"
 
 var createCmd = &cobra.Command{
 	Use:   "create",
@@ -46,11 +43,6 @@ var createCmd = &cobra.Command{
 		}
 		if co.Machine == "" {
 			glog.Error("Please provide yaml file for machine definition.")
-			cmd.Help()
-			os.Exit(1)
-		}
-		if co.SSHKeyPath == "" {
-			glog.Error("Please provide a path containing public and private ssh keys")
 			cmd.Help()
 			os.Exit(1)
 		}
@@ -71,7 +63,7 @@ func RunCreate(co *CreateOptions) error {
 		return err
 	}
 
-	d := deploy.NewDeployer(provider, co.SSHKeyPath, co.KubeconfigPath)
+	d := deploy.NewDeployer(provider, sshKeyPath, kubeConfig)
 
 	return d.CreateCluster(cluster, machines)
 }
@@ -79,8 +71,6 @@ func RunCreate(co *CreateOptions) error {
 func init() {
 	createCmd.Flags().StringVarP(&co.Cluster, "cluster", "c", "", "cluster yaml file")
 	createCmd.Flags().StringVarP(&co.Machine, "machines", "m", "", "machine yaml file")
-	createCmd.Flags().StringVarP(&co.SSHKeyPath, "sshkey", "s", "", "ssh key directory")
-	createCmd.Flags().StringVarP(&co.KubeconfigPath, "kubeconfig", "k", "./kubeconfig", "path to kubeconfig")
 
 	RootCmd.AddCommand(createCmd)
 }

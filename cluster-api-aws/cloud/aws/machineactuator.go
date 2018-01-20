@@ -106,10 +106,10 @@ func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.Ma
 		publicKeyPath:  path.Join(sshKeyPath, "id_rsa.pub"),
 	}
 	if _, err := os.Stat(sshCreds.publicKeyPath); err != nil {
-		return nil, fmt.Errorf("Problem acesssing file path %s", sshCreds.publicKeyPath)
+		return nil, fmt.Errorf("Problem acesssing sshkey path %s", sshCreds.publicKeyPath)
 	}
 	if _, err := os.Stat(sshCreds.privateKeyPath); err != nil {
-		return nil, fmt.Errorf("Problem acesssing file path %s", sshCreds.privateKeyPath)
+		return nil, fmt.Errorf("Problem acesssing sshkey path %s", sshCreds.privateKeyPath)
 	}
 
 	cloudCredentials, err := getCloudCredentials("aws")
