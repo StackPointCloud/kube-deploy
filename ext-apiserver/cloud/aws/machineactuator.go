@@ -87,7 +87,7 @@ type AWSClient struct {
 	session        *Session
 	kubeadmToken   string
 	sshCreds       SshCreds
-	machineClient  client.MachinesInterface
+	machineClient  client.MachineInterface
 }
 
 // placeholder, preparing for multiple secure ways to obtain credentials
@@ -98,7 +98,7 @@ func getCloudCredentials(cloudProvider string) (interface{}, error) {
 	return nil, fmt.Errorf("Unsupported provider: %s", cloudProvider)
 }
 
-func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.MachinesInterface) (*AWSClient, error) {
+func NewMachineActuator(sshKeyPath, kubeadmToken string, machineClient client.MachineInterface) (*AWSClient, error) {
 	sshCreds := SshCreds{
 		user:           "ubuntu",
 		privateKeyPath: path.Join(sshKeyPath, "id_rsa"),
@@ -300,13 +300,14 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if err != nil {
 		return err
 	}
-	// glog.Infof("%s", machine.ObjectMeta.Name)
-	// glog.Infof("%s", machine.ObjectMeta.GenerateName)
+	glog.Infof("%s", machine.ObjectMeta.Name)
+	glog.Infof("%s", machine.ObjectMeta.GenerateName)
 
 	//	targetVpcName := "cluster-api-aws"
 	clusterConfig, _ := getClusterProviderConfig(cluster)
 	targetVpcName := clusterConfig.VpcName
 
+	// --- Network configuration and creation ---
 	var vpc *ec2.Vpc
 	descriptor := &ec2.DescribeVpcsInput{}
 	vpcs, err := svc.DescribeVpcs(descriptor)
@@ -328,8 +329,6 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 	if *vpc.CidrBlock != clusterConfig.VpcCIDR {
 		return fmt.Errorf("VPC %s cidr (%s) does not match requested cidr (%s)", targetVpcName, *vpc.CidrBlock, clusterConfig.VpcCIDR)
 	}
-
-	// return fmt.Errorf("stop")
 
 	var subnet *ec2.Subnet
 	subnets, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
@@ -358,6 +357,36 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 			return err
 		}
 		subnet = subnetCreation.Subnet
+	}
+
+	// --- SSH access configuration and creation --
+	sshKeyName := fmt.Sprintf("sshkey-%s", cluster.ObjectMeta.Name)
+	keypairs, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		KeyNames: []*string{awssdk.String(sshKeyName)},
+	})
+	if err != nil || len(keypairs.KeyPairs) == 0 {
+		content, err := ioutil.ReadFile(aws.sshCreds.publicKeyPath)
+		if err != nil {
+			return err
+		}
+		kp := &ec2.ImportKeyPairInput{
+			KeyName:           awssdk.String(sshKeyName),
+			PublicKeyMaterial: content,
+		}
+		_, err = svc.ImportKeyPair(kp)
+		if err != nil {
+			return err
+		}
+	}
+
+	// --- Host configuration and creation ---
+	exists, err := aws.Exists(machine)
+	if exists {
+		return fmt.Errorf("machine %s already exists", machine.ObjectMeta.Name)
+	}
+
+	if err != nil {
+		return fmt.Errorf("error checking machine %s existence, %v", machine.ObjectMeta.Name, err)
 	}
 
 	groups, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
@@ -408,26 +437,6 @@ func (aws *AWSClient) Create(cluster *clusterv1.Cluster, machine *clusterv1.Mach
 		return err
 	}
 	b64UserData := base64.StdEncoding.EncodeToString([]byte(userData))
-
-	// set up ssh key in AWS if not already present
-	sshKeyName := fmt.Sprintf("sshkey-%s", cluster.ObjectMeta.Name)
-	keypairs, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
-		KeyNames: []*string{awssdk.String(sshKeyName)},
-	})
-	if err != nil || len(keypairs.KeyPairs) == 0 {
-		content, err := ioutil.ReadFile(aws.sshCreds.publicKeyPath)
-		if err != nil {
-			return err
-		}
-		kp := &ec2.ImportKeyPairInput{
-			KeyName:           awssdk.String(sshKeyName),
-			PublicKeyMaterial: content,
-		}
-		_, err = svc.ImportKeyPair(kp)
-		if err != nil {
-			return err
-		}
-	}
 
 	tags := []*ec2.TagSpecification{
 		&ec2.TagSpecification{
@@ -558,12 +567,15 @@ func (aws *AWSClient) remoteSshCommand(m *clusterv1.Machine, cmd string) (string
 	return strings.TrimSpace(parts[1]), nil
 }
 
+// GetKubeConfig gets the kubeconfig from the master, returning an error only if
+// the error is not-retryable.
 func (aws *AWSClient) GetKubeConfig(master *clusterv1.Machine) (string, error) {
 
 	command := "sudo cat /etc/kubernetes/admin.conf"
 	config, err := aws.remoteSshCommand(master, command)
 	if err != nil {
-		return "", err
+		glog.V(5).Infof("SSH error is thought to be retryable, %v", err)
+		return "", nil
 	}
 	// remove text before start of config
 	re := regexp.MustCompile("apiVersion: ")

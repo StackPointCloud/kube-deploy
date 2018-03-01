@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"k8s.io/kube-deploy/ext-apiserver/cloud"
+	"k8s.io/kube-deploy/ext-apiserver/cloud/aws"
 	"k8s.io/kube-deploy/ext-apiserver/cloud/google"
 	clusterv1 "k8s.io/kube-deploy/ext-apiserver/pkg/apis/cluster/v1alpha1"
 )
@@ -27,6 +28,8 @@ func newMachineDeployer(cloud string, kubeadmToken string) (machineDeployer, err
 	switch cloud {
 	case "google":
 		return google.NewMachineActuator(kubeadmToken, nil)
+	case "aws":
+		return aws.NewMachineActuator("/Users/nfranzen/.ssh", kubeadmToken, nil)
 	default:
 		return nil, fmt.Errorf("Not recognized cloud provider: %s\n", cloud)
 	}

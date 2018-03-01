@@ -21,10 +21,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"k8s.io/kube-deploy/ext-apiserver/cloud/aws"
+	"k8s.io/kube-deploy/ext-apiserver/cloud/google"
 	clusterv1 "k8s.io/kube-deploy/ext-apiserver/pkg/apis/cluster/v1alpha1"
 	client "k8s.io/kube-deploy/ext-apiserver/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1"
-	"k8s.io/kube-deploy/ext-apiserver/cloud/google"
-	"k8s.io/kube-deploy/ext-apiserver/cloud/aws"
 )
 
 // An actuator that just logs instead of doing anything.
@@ -41,7 +41,7 @@ func NewMachineActuator(cloud string, kubeadmToken string, machineClient client.
 	case "google":
 		return google.NewMachineActuator(kubeadmToken, machineClient)
 	case "aws":
-		return aws.NewMachineActuator(kubeadmToken, machineClient)
+		return aws.NewMachineActuator("/home/Users/nfranzen//.ssh", kubeadmToken, machineClient)
 	case "test", "azure":
 		return &loggingMachineActuator{}, nil
 	default:

@@ -216,7 +216,7 @@ func (d *deployer) copyKubeConfig(master *clusterv1.Machine) error {
 		if config == "" {
 			return false, nil
 		}
-		glog.Infof("Kubernetes is up.. Writing kubeconfig to disk.")
+		glog.Infof("Kubernetes is up. Writing kubeconfig to disk.")
 		err = d.writeConfigToDisk(config)
 		return (err == nil), nil
 	}, 5)
